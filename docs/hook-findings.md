@@ -53,7 +53,7 @@ t+16.5s  PostToolUse  (tool_name = AskUserQuestion)   ← 红态解除（用户�
 {
   "session_id": "2683f6d5-...",
   "transcript_path": "C:\\Users\\<user>\\.claude\\projects\\d--...-ai-traffic-light\\<sid>.jsonl",
-  "cwd": "D:\\Mr\\Files\\GitHub\\ai-traffic-light",
+  "cwd": "D:\\...\\ai-traffic-light",
   "prompt_id": "977f306d-...",
   "hook_event_name": "PreToolUse",
   "tool_name": "Bash",
@@ -81,7 +81,7 @@ t+16.5s  PostToolUse  (tool_name = AskUserQuestion)   ← 红态解除（用户�
 
 ```json
 { "session_id": "...", "transcript_path": "...",
-  "cwd": "d:\\Mr\\Files\\GitHub\\ai-traffic-light",
+  "cwd": "d:\\...\\ai-traffic-light",
   "prompt_id": "...", "hook_event_name": "UserPromptSubmit",
   "permission_mode": "auto", "prompt": "开始" }
 ```

@@ -36,6 +36,9 @@ src/hook_writer.py  ──原子写──▶  %LOCALAPPDATA%\ai-traffic-light\se
 ## 安装
 
 ```bash
+git clone https://github.com/xz-code/claude-traffic-light.git
+cd claude-traffic-light
+
 python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 
