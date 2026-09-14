@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.tmp
+
+# 构建产物：PyInstaller 的输出和打包缓存，加起来两百多 MB，
+# 只该出现在 Release 的附件里（build.py 会重新生成）
+dist/
+build_cache/
+
+# 探针的输出，属于调试中间产物
+probe-events.jsonl
+
+# 本机权限白名单，因人因机而异
+.claude/settings.local.json

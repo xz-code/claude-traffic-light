@@ -1,0 +1,4 @@
+# 只有 UI 端需要依赖；hook 端（src/hook_writer.py）纯标准库，
+# 故意如此——hook 挂在 Claude Code 的关键路径上，不该依赖任何第三方包。
+
+PySide6-Essentials>=6.10
