@@ -14,3 +14,6 @@ probe-events.jsonl
 
 # 本机权限白名单，因人因机而异
 .claude/settings.local.json
+
+# 从参考项目拷来的 README，只当双语排版模板用，不是本项目的内容
+README copy.md
