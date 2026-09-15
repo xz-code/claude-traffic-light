@@ -140,6 +140,21 @@ def handle(payload):
         "reason": reason,
         # 第一条指令胜出：旧的留着就不覆盖
         "title": old_title or _title_from_prompt(event, payload),
+        # Claude Code 自己总结的标题，挂在 transcript 尾部。每个事件都重读一次
+        # ——它异步生成、中途还会变，只在某个事件上读会漏掉更新。实测它离文件尾
+        # 不超过 32 KB，只读尾部窗口，代价可以忽略。
+        #
+        # 存成**独立字段**而不是覆盖 title：实测有一半的 transcript 压根没有这条
+        # 记录（子 agent 的全部没有），覆盖会让那半边的会话凭空丢掉名字。
+        # 谁优先由显示层决定（见 tooltip.session_name）。
+        #
+        # 末尾的 `or existing.get(...)` 是**保留上一次读到的名字**：读不到时不能
+        # 擦成空。这不是理论担忧——transcript 正被 Claude Code 持续追加，而本仓库
+        # 的 `_write_atomic` 已经在为同一类 Windows 文件占用问题重试了
+        # （os.replace 撞上别人读文件会抛 PermissionError）。读失败就把名字抹掉，
+        # 表现是提示框里的会话名莫名其妙地变回空白，且极难复现。
+        "ai_title": (core.read_ai_title(payload.get("transcript_path") or "")
+                     or existing.get("ai_title") or ""),
         "tool": payload.get("tool_name") or "",
         "transcript": payload.get("transcript_path") or "",
         "updated_at": time.time(),

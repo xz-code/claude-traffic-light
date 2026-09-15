@@ -209,6 +209,7 @@ hook 端不是只读观察者——它往 `%LOCALAPPDATA%\ai-traffic-light\sessi
 |---|---|---|
 | `state` | `core.map_event()` | 灯态，UI 端聚合的依据 |
 | `title` | `UserPromptSubmit` 的 `prompt` | 见下 |
+| `ai_title` | transcript 尾部的 `ai-title` 记录 | Claude Code 自己总结的标题，见下 |
 | `reason` | `core.reason_text()` | 一句中文，给悬停提示用 |
 | `cwd` / `project` | `cwd` | 路径要先规范化（实测是反斜杠） |
 | `owner_pid` / `owner_name` / `chain` | 进程链回溯 | 僵尸清理靠它 |
@@ -233,4 +234,35 @@ hook 端不是只读观察者——它往 `%LOCALAPPDATA%\ai-traffic-light\sessi
 2. **被删后重建的会话，标题是让它复活的那条指令**，不是最初那条。
    `SessionEnd` 和右键「忽略会话」都会删文件；重建时 hook 从零开始看，
    所以"第一条"就是复活后的第一条。
+
+### `ai_title` 的规则（Claude Code 自己总结的标题）
+
+会话的 transcript（`~/.claude/projects/<项目>/<会话号>.jsonl`）尾部有一条
+`{"type":"ai-title","sessionId":"...","aiTitle":"..."}` 记录，是 Claude Code
+按**对话内容**总结出来的标题。**官方无文档**，下面每一条都是探针实测的结论
+（`tools/probe_ai_title.py`，本机 36 个 jsonl）：
+
+- **17/36 根本没有这条记录**——子 agent 的 transcript 全都没有、老会话也没有。
+  所以"没有"是常态而不是故障。正因如此，`ai_title` 和 `title` 是**两个独立
+  字段、各写各的**，谁优先由显示层（`tooltip.session_name`）决定；
+  hook 用 `ai_title` 覆盖 `title` 是错的，那会让一半的会话凭空丢掉名字。
+- **标题中途会变**：17 个有过该记录的文件里 7 个变过。实测见过
+  `nodemon not recognized` -> `nodemon 未找到`（连语言都换了）、
+  `Configure opencode go integration` -> `Configure OpenCode Go integration`。
+  所以只能取**最后一条**，取第一条会显示一个已经过时的名字。
+- **不在文件末尾**：记录被反复追加（最长的一个文件里有 99 条），最后一条
+  **不保证**是最后一行，所以只能扫窗口，不能用"读末行"取巧。
+- **窗口开 128 KiB**：实测最后一条离 EOF 最远 32,391 B，取约 4 倍余量。
+  **不能整读**——最大的 transcript 有 3.8 MB，而这个函数每个 hook 事件都跑一次。
+- **窗口会把某条记录切成半截**，而且被切的那条可能正好是 `ai-title` 自己
+  （它长得像条记录、能通过那个廉价的字节预筛，然后在 `json.loads` 上才炸）。
+  必须跳过它继续往下扫。就此罢手会漏掉后面的完整记录；抛出去更糟——异常会
+  一路传到 `main()` 的顶层 `except`，把**整个事件**吞掉，表现是灯根本不更新，
+  比丢一个标题严重得多。
+- **会话刚开始时没有**：第一次出现总在第 8～16 行，晚于第一条 `user` 消息
+  （永远在第 3 行）。它是另一次模型调用生成的，所以 hook 侧读会有半拍延迟——
+  下一个事件才拿得到。
+
+显示层的取舍：`ai_title` 优先于 `title`，因为"在聊什么"比"第一句问了什么"更贴近
+你此刻想知道的东西。`title` 不是备胎而是主力的一半：另一半会话只有它。
 绿排第二，因为它是"需你确认才消失"的可操作状态；黄不打扰人。

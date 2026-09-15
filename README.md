@@ -138,15 +138,18 @@ A dark card, one line per session: `project · prompt` on the left, the same col
 
 深色卡片，一行一个会话：左边是 `项目 · 指令`，右边是同样带色的状态词，右边缘对齐。
 
-- **The prompt is that session's first question** (truncated to 12 characters). Only the hook writes it, on the first `UserPromptSubmit`, and no later event ever changes it — which is what lets you tell two sessions in the same project apart.
-- Sessions that were already open before this upgrade have no prompt and show as `project · #first-8-chars-of-session-id`. That is not a fault — it disappears when the session ends.
+- **The title prefers the summary Claude Code itself writes** for the session (read from the session transcript, "what we're working on"). It falls back to **the first question you typed** (truncated to 24 characters) when there is none. **Roughly half of all sessions have no AI summary** — subagent transcripts never do — so the fallback is a normal path, not an error. The first-question title never changes once written, which is what lets you tell two sessions in the same project apart even after the AI title drifts.
+- Sessions that were already open before this upgrade have neither and show as `project · #first-8-chars-of-session-id`. That is not a fault — it disappears when the session ends.
 - Only **non-dark** sessions are listed, at most 6; beyond that they collapse into `…and N more`. A red session is always the first row, in bold.
 - **Waiting reasons are in Chinese.** When a case is unrecognised, the tooltip says one generic sentence rather than pasting Claude Code's English original.
 - **No flicker while the mouse rests**: the tooltip is only rebuilt when its content actually changes. (It used to be rebuilt unconditionally every 250ms, recomputing its size and position while visible.)
 
-- **`指令` 是该会话的第一句提问**（截到 12 字）。它只由 hook 在第一次
-  `UserPromptSubmit` 写入，之后任何事件都不会改它——所以同项目的两个会话能分清。
-- 本次升级之前就开着的会话没有这句指令，显示成 `项目 · #会话号前8位`。
+- **标题优先用 Claude Code 自己总结的会话名**（从 transcript 里读，也就是"在聊什么"），
+  没有才回退到**你打的第一句提问**（截到 24 字）。**约一半的会话没有 AI 总结**
+  （子 agent 的 transcript 一律没有），所以回退是正常路径，不是故障。
+  第一句提问这个标题一旦写下就不再变，所以哪怕 AI 标题中途漂移了，
+  同项目的两个会话照样分得清。
+- 本次升级之前就开着的会话两个都没有，显示成 `项目 · #会话号前8位`。
   不是故障，那个会话结束就没了。
 - 只列**非暗态**会话，最多 6 行，再多折叠成 `…还有 N 个`。红灯永远在第一行、加粗。
 - **等待原因是中文**。认不出的场景宁可只说一句笼统的话，也不把 Claude Code 的
@@ -194,6 +197,8 @@ install.py               hook install / uninstall / status / autostart
 tools/simulate.py        drives the light without Claude Code; debugging and previewing
 tools/render_preview.py  renders the four-state preview image offscreen
 tools/render_tooltip.py  renders the tooltip offscreen; measures right-column alignment
+tools/test_hover.py      hover-panel state machine (delay, grace, drag, positioning)
+tools/probe_ai_title.py  probe: measures where Claude Code keeps the AI session title
 probe_hook.py            probe: dumps raw hook events to disk for diagnosis
 docs/hook-findings.md    every measurement we took (with verification status noted)
 ```
@@ -208,6 +213,8 @@ install.py           hook 安装 / 卸载 / 状态 / 开机自启
 tools/simulate.py    不启动 Claude 也能驱动灯，用于调试和预览
 tools/render_preview.py  离屏渲染四态预览图
 tools/render_tooltip.py  离屏渲染悬停提示 + 量右列对齐
+tools/test_hover.py  悬停面板状态机（延迟、宽限、拖动、摆位）
+tools/probe_ai_title.py  探针：量 Claude Code 把会话标题藏在哪、离文件尾多远
 probe_hook.py        探针：把原始 hook 事件落盘，排查用
 docs/hook-findings.md  全部实测记录（含验证状态标注）
 ```
@@ -231,9 +238,15 @@ python tools/simulate.py clear    # clear simulated sessions / 清掉模拟会�
 # 忽略会话的回归测试（删除范围、复活语义、菜单接线）
 .venv\Scripts\python.exe tools\test_ignore.py
 
-# Tooltip regression test (title persistence, Chinese reasons, escaping, alignment, no-flicker)
-# 悬停提示的回归测试（标题持久化、中文原因、转义、对齐、防闪烁）
+# Tooltip regression test (AI/first-prompt titles, Chinese reasons, escaping, alignment, no-flicker)
+# 悬停提示的回归测试（AI/首句标题、中文原因、转义、对齐、防闪烁）
 .venv\Scripts\python.exe tools\test_tooltip.py
+
+# Hover state machine (delay, grace, drag suppression, panel placement)
+# 悬停状态机（延迟弹出、离开宽限、拖动不弹、面板摆位）
+# Brief flashes in the corner are expected — it asserts real visibility.
+# 屏幕角落会闪几下是正常的，它断言的就是真实可见性。
+.venv\Scripts\python.exe tools\test_hover.py
 
 # Regenerate the preview image / 重新生成预览图
 .venv\Scripts\python.exe tools\render_preview.py

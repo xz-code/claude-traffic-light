@@ -12,8 +12,13 @@ build_cache/
 # 探针的输出，属于调试中间产物
 probe-events.jsonl
 
-# 本机权限白名单，因人因机而异
-.claude/settings.local.json
+# AI 工具的本机配置与技能副本：因人因机而异，也可能含密钥/权限白名单，
+# 不进仓库。要分享的约定写进 README 或 docs/，别靠这里。
+# skills-lock.json 一并忽略：它锁的是技能版本，可技能本体在 .agents/ 里、
+# 同样不入库——只留锁文件等于锁了个空。
+.claude/
+.agents/
+skills-lock.json
 
 # 从参考项目拷来的 README，只当双语排版模板用，不是本项目的内容
 README copy.md

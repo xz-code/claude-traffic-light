@@ -4,6 +4,7 @@ hook 端（系统 Python，仅标准库）与 UI 端（venv 里的 PySide6）都
 保证"事件怎么变成灯态"这件事只有一份真相。
 """
 
+import json
 import os
 import pathlib
 import re
@@ -125,6 +126,63 @@ _INJECTED_RE = re.compile(r"^<[a-z][a-z0-9_-]*>")
 def clip_text(s, limit=TITLE_MAX):
     """折叠空白并截断。用于把用户的第一句提问收成一行标题。"""
     return " ".join((s or "").split())[:limit]
+
+
+#: 从 transcript 尾部往回找 `ai-title` 的字节窗口。
+#:
+#: 实测（tools/probe_ai_title.py）本机 19 个带该记录的文件里，最后一条离
+#: 文件尾最远 32,391 B，这里取 128 KiB 留约 4 倍余量。**不能整读**——最大的
+#: transcript 有 3.8 MB，而这个函数每个 hook 事件都要跑一次。
+AI_TITLE_SCAN = 128 * 1024
+
+
+def read_ai_title(transcript_path, window=AI_TITLE_SCAN):
+    """取 Claude Code 自己总结的会话标题；没有就返回空串。
+
+    名字藏在 transcript（`~/.claude/projects/<项目>/<会话号>.jsonl`）尾部一条
+    `{"type":"ai-title","aiTitle":"..."}` 记录里。这是 Claude Code 的**内部**
+    格式，官方无文档，所以下面每个判断都以本机实测为准
+    （tools/probe_ai_title.py，36 个 jsonl）：
+
+    * **17/36 根本没有这条记录**（子 agent 的 transcript 全都没有、老会话也没有）
+      ——"没有"是常态不是故障，调用方必须能回退；
+    * 标题**中途会变**：17 个里 7 个变过，`nodemon not recognized` ->
+      `nodemon 未找到`、`Configure opencode go integration` ->
+      `Configure OpenCode Go integration` 都实测见过。所以只能取**最后一条**，
+      取第一条会显示一个已经过时的名字；
+    * 记录会被反复追加（最长的一个文件里有 99 条），且最后一条**不保证**是
+      文件最后一行，所以只能扫窗口不能用"读末行"取巧。
+
+    故意不抛异常：拿不到名字不是故障，回退即可。
+    """
+    if not transcript_path:
+        return ""
+    try:
+        path = pathlib.Path(transcript_path)
+        size = path.stat().st_size
+        with open(path, "rb") as fh:
+            fh.seek(max(0, size - window))
+            buf = fh.read()
+    except Exception:
+        return ""
+
+    title = ""
+    for line in buf.split(b"\n"):
+        # 先做廉价的字节预筛：绝大多数行不含这个键，省下 json.loads 的开销
+        if b'"ai-title"' not in line:
+            continue
+        try:
+            rec = json.loads(line.decode("utf-8"))
+        except Exception:
+            # 被窗口切断的半截记录，**必须跳过往下扫，不能就此罢手、更不能抛**。
+            # 两件事都会让紧跟其后的完整记录永远读不到；而这里抛出去还会一路
+            # 传到 hook_writer.main() 的顶层 except——那会吞掉**整个事件**，
+            # 表现是灯根本不更新，比丢个标题严重得多。
+            continue
+        if rec.get("type") == "ai-title":
+            # 空标题不算数：留着上一条，别把已有的好名字擦成空白
+            title = (rec.get("aiTitle") or "").strip() or title
+    return clip_text(title)
 
 
 def is_injected_prompt(text):

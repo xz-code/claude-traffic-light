@@ -10,8 +10,8 @@ class Session:
     """一个 Claude Code 会话的当前快照。"""
 
     __slots__ = ("session_id", "cwd", "project", "state", "reason",
-                 "title", "tool", "updated_at", "owner_pid", "owner_name",
-                 "chain", "path")
+                 "title", "ai_title", "tool", "updated_at", "owner_pid",
+                 "owner_name", "chain", "path")
 
     def __init__(self, data, path):
         self.session_id = data.get("session_id") or path.stem
@@ -22,6 +22,10 @@ class Session:
         #: 该会话的第一条用户指令摘要。本次升级前开的会话没有这个字段，
         #: 会是空串 —— 显示层要自己回退（见 tooltip.session_name）。
         self.title = data.get("title") or ""
+        #: Claude Code 自己总结的标题（取自 transcript 尾部）。**没有是常态**：
+        #: 实测 36 个 transcript 里 17 个没有（子 agent 的全没有），显示层
+        #: 要回退到 title（见 tooltip.session_name）。
+        self.ai_title = data.get("ai_title") or ""
         self.tool = data.get("tool") or ""
         self.updated_at = float(data.get("updated_at") or 0)
         self.owner_pid = data.get("owner_pid")

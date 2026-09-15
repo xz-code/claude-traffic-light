@@ -9,7 +9,7 @@
 主路径是"诚实"的：把**同一份 HTML** 喂给 QTextDocument。QLabel/QTipLabel 的富文本
 内部就是 QTextDocument，同引擎、同字体度量，所以表格列宽、对齐、换行都与真机一致——
 这不是近似。唯一要复刻的是外框（底色/边框/内边距），那些取自 tooltip.py 的常量，
-真机那边由 TOOLTIP_QSS 决定。
+真机那边由 tooltip.PANEL_QSS 决定。
 
 刻意**不**用 QT_QPA_PLATFORM=offscreen：Windows 上那样字体库是空的，文字会全变方块。
 
@@ -43,7 +43,7 @@ from PySide6.QtWidgets import QApplication                        # noqa: E402
 
 DEFAULT_OUT = pathlib.Path.home() / "AppData" / "Local" / "Temp"
 
-#: 与 TOOLTIP_QSS 对齐的外框参数
+#: 与 tooltip.PANEL_QSS / widget.PANEL_INSET 对齐的外框参数
 BORDER = 1
 PADDING = 6
 INSET = BORDER + PADDING
@@ -107,7 +107,9 @@ def render_honest(html_text, font=None):
     p.setRenderHint(QPainter.Antialiasing)
     p.setPen(QPen(QColor(tooltip.SEP), BORDER))
     p.setBrush(QColor(tooltip.HOUSING_BG))
-    p.drawRect(QRectF(0.5, 0.5, pm.width() - 1, pm.height() - 1))
+    # 圆角半径与真机同源（tooltip.PANEL_RADIUS），别在这里写死数字
+    p.drawRoundedRect(QRectF(0.5, 0.5, pm.width() - 1, pm.height() - 1),
+                      tooltip.PANEL_RADIUS, tooltip.PANEL_RADIUS)
     p.translate(INSET, INSET)
     doc.drawContents(p)
     p.end()
@@ -205,7 +207,7 @@ def main():
 
     app = QApplication(sys.argv)
     # 真机的外框由这条样式表决定；这里只是为了取它的字体度量
-    app.setStyleSheet(tooltip.TOOLTIP_QSS)
+    app.setStyleSheet(tooltip.PANEL_QSS)
 
     if args.align:
         return run_align(app)

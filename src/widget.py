@@ -12,10 +12,10 @@ import sys
 import time
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import (QAction, QColor, QIcon, QPainter, QPixmap,
-                           QRadialGradient)
-from PySide6.QtWidgets import (QApplication, QMenu, QMessageBox,
-                               QSystemTrayIcon, QWidget)
+from PySide6.QtGui import (QAction, QColor, QGuiApplication, QIcon, QPainter,
+                           QPen, QPixmap, QRadialGradient)
+from PySide6.QtWidgets import (QApplication, QLabel, QMenu, QMessageBox,
+                               QSystemTrayIcon, QVBoxLayout, QWidget)
 
 import aggregator
 import core
@@ -33,6 +33,21 @@ H = PAD * 2 + D * 3 + GAP * 2
 RADIUS = int(14 * SCALE)     # 外壳圆角
 
 HOUSING = QColor(28, 28, 30)
+
+# ---------------------------------------------------------------- 悬停提示时机
+
+#: 鼠标在灯上停多久才弹提示框。太短会在"扫过去"时误弹，太长显得迟钝。
+HOVER_SHOW_DELAY_MS = 400
+#: 鼠标离开灯之后宽限多久才收。留一点余量，擦着边缘时不会闪。
+HOVER_HIDE_GRACE_MS = 200
+
+#: 悬停面板与灯之间的间隙
+PANEL_GAP = 8
+
+#: 面板内容的内缩 = QSS 的 1px 边框 + 6px 内边距。
+#: 必须与 tooltip.PANEL_QSS 的 border 和 tools/render_tooltip.py 的
+#: INSET 三者对齐，否则离屏预览和真机看到的间距不是一回事。
+PANEL_INSET = 7
 
 #: (键名, 亮色, 灭色)。灭色取亮色的深色版，保留一点色相，
 #: 这样即使灯灭着也能看出这是红绿灯而不是三个黑洞。
@@ -87,6 +102,103 @@ def jump_to_window(cwd):
         return False
 
 
+class HoverPanel(QWidget):
+    """悬停提示面板——**自己画的，不是 QToolTip**。
+
+    为什么不用 QToolTip：**它的生命周期不归我们管**。到时限会自己收走，
+    而那个隐藏是 `QTimer::singleShot`——停不掉（实测：QTipLabel 的子定时器
+    0 个）；定期用相同文本重调 `showText` 也不重置它的计时（实测：3/6/9 秒
+    都还在，第 10 秒照样消失，而且它一旦销毁，下次弹出必然是新建窗口 = 可见
+    的一闪）。所以"鼠标停在提示框上就一直显示"这条，它根本做不到。
+
+    自己拥有窗口之后一切都归我们管：
+      * 显示 / 隐藏完全由 TrafficLight 的状态机说了算，没有别的超时
+      * 位置自己摆（贴灯一侧，并钳进屏幕）
+      * 刷新内容只是改文本，不存在"重弹"
+      * 不再需要按类名去 Qt 内部翻 QTipLabel 改窗口属性
+
+    窗口属性沿用灯那一套：`Qt.Tool` 让它不进任务栏、也不抢焦点。
+    """
+
+    def __init__(self, owner):
+        super().__init__(None, Qt.Tool | Qt.FramelessWindowHint
+                         | Qt.WindowStaysOnTopHint)
+        self.owner = owner
+        self.setObjectName("hoverPanel")        # 给 tooltip.PANEL_QSS 用
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)   # 不抢焦点
+        self.setFocusPolicy(Qt.NoFocus)
+
+        self._label = QLabel(self)
+        self._label.setTextFormat(Qt.RichText)
+        self._label.setFocusPolicy(Qt.NoFocus)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(PANEL_INSET, PANEL_INSET,
+                               PANEL_INSET, PANEL_INSET)
+        lay.addWidget(self._label)
+
+    def set_content(self, html):
+        """换内容并重新量尺寸。位置不动——调用方要的就是"刷新但不跳位"。"""
+        self._label.setText(html)
+        self.adjustSize()
+
+    def paintEvent(self, event):
+        """自己画背景和边框。
+
+        **不能靠 QSS 的 background-color。** 面板开了 WA_TranslucentBackground
+        （为了圆角外那圈能透出桌面），而它隐含 WA_NoSystemBackground，Qt 会
+        **跳过自动背景绘制**——QSS 里写 background-color 一点用没有。
+        实测过：grab() 出来 8132 个像素里只有 255 个不透明，全是文字，
+        背景像素 0 个。
+
+        而这不只是难看：整块面板透明，在 Windows 上就等于**点击穿透**
+        （同 WA_TranslucentBackground 的已知行为）。鼠标事件直接穿过去，
+        面板收不到 Enter，灯那边发出去的 Leave 就撤销不掉，
+        于是面板刚显示就消失——**一个根因，两个症状**。
+        """
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        # 缩半像素，1px 的描边才不会被画到窗口边缘外面去
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.setPen(QPen(QColor(tooltip.SEP), 1))
+        p.setBrush(QColor(tooltip.HOUSING_BG))
+        p.drawRoundedRect(rect, tooltip.PANEL_RADIUS, tooltip.PANEL_RADIUS)
+
+    def show_beside(self, anchor):
+        """摆到 anchor（灯的矩形）旁边：优先右侧，放不下就翻到左侧，再钳进屏幕。
+
+        必须钳：灯可以被拖到桌面任何地方，包括贴着屏幕边缘或任务栏。
+        用 availableGeometry 而不是 geometry，免得压住任务栏。
+        """
+        self.adjustSize()
+        scr = (QGuiApplication.screenAt(anchor.center())
+               or QGuiApplication.primaryScreen())
+        avail = scr.availableGeometry()
+        pw, ph = self.width(), self.height()
+
+        x = anchor.right() + 1 + PANEL_GAP
+        if x + pw > avail.right() + 1:
+            x = anchor.left() - PANEL_GAP - pw      # 右边放不下就翻到左边
+        x = max(avail.left(), min(x, avail.right() + 1 - pw))
+
+        y = anchor.center().y() - ph // 2
+        y = max(avail.top(), min(y, avail.bottom() + 1 - ph))
+
+        self.move(x, y)
+        self.show()
+        self.raise_()
+
+    # 鼠标移到面板上也算"还在悬停"——否则一碰到它就被判成离开、收起来了，
+    # 而"移到提示框上继续读"正是这个面板存在的理由。
+    def enterEvent(self, event):
+        self.owner._on_hover_enter()
+
+    def leaveEvent(self, event):
+        self.owner._on_hover_leave()
+
+
 class TrafficLight(QWidget):
     def __init__(self, cfg):
         super().__init__()
@@ -94,7 +206,8 @@ class TrafficLight(QWidget):
         self.agg = aggregator.Aggregator()
         self.sessions = []
         self.state = core.DARK
-        self._tooltip = ""      # 上一次设进 setToolTip 的文本，用来避免重复设置
+        self._tooltip = ""      # 当前该显示的提示文本，只在真的变了时才换
+        self._hovering = False  # 鼠标是否停在灯或面板上（含离开后的宽限期内）
         self._blink_on = True
         self._press_pos = None
         self._press_time = None
@@ -105,8 +218,19 @@ class TrafficLight(QWidget):
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setFixedSize(W, H)
-        self.setToolTip("AI 状态灯")
         self._restore_position()
+
+        self._panel = HoverPanel(self)
+
+        # 悬停延迟与离开宽限，都做成可取消的单次定时器：
+        # 在延迟内移开就不弹，在宽限内回来就不收。
+        self._show_timer = QTimer(self)
+        self._show_timer.setSingleShot(True)
+        self._show_timer.timeout.connect(self._show_tooltip)
+
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.timeout.connect(self._hide_tooltip)
 
         self._blink = QTimer(self)
         self._blink.timeout.connect(self._toggle_blink)
@@ -138,7 +262,7 @@ class TrafficLight(QWidget):
             self.update()
 
     def _sync_tooltip(self):
-        """只在文本真的变了时才 setToolTip。
+        """提示内容变了才换。
 
         原来是无条件每 250ms 重设一次。提示框正显示时改文本，Qt 会重算尺寸
         并重新定位——表现就是"鼠标一移动提示就疯狂闪烁"（docs/verification.md
@@ -148,9 +272,40 @@ class TrafficLight(QWidget):
         而两者都在 refresh() 里刚更新过；_toggle_blink 只重绘灯、不碰提示。
         """
         text = tooltip.tooltip_html(self.sessions)
-        if text != self._tooltip:
-            self._tooltip = text
-            self.setToolTip(text)
+        if text == self._tooltip:
+            return
+        self._tooltip = text
+        if self._panel.isVisible():
+            # 正显示着：只换文本，窗口不动。面板是我们自己的，
+            # 改内容不会重定位，所以不存在"看起来重弹了一下"。
+            self._panel.set_content(text)
+
+    # ------------------------------------------------------------ 悬停提示
+
+    def _show_tooltip(self):
+        """弹出提示面板。
+
+        面板是**自己画的窗口**（HoverPanel），不是 QToolTip。原因见那个类的
+        文档字符串：QToolTip 的隐藏是停不掉的 singleShot，超时后必然销毁重建，
+        做不到"鼠标停在上面就一直显示"。
+
+        顺带说明为什么早先连 QToolTip 都要手动调：**只有窗口是激活窗口时，
+        Qt 才会发 QEvent.ToolTip**，而本窗口是 Qt.Tool，天生不会被激活——
+        那正是不抢焦点、不打断你打字的原因。自己拥有窗口之后这一层也不存在了。
+        """
+        if not self._tooltip:
+            return
+        self._panel.set_content(self._tooltip)
+        self._panel.show_beside(self.frameGeometry())
+
+    def _hide_tooltip(self):
+        self._panel.hide()
+
+    # 这里曾经有个 _make_tip_click_through()：靠遍历顶层窗口、按类名
+    # "QTipLabel" 找到 Qt 内部的提示框，再改它的原生 ex-style 设成鼠标穿透。
+    # 那是为了绕开 QToolTip"必然压住灯"导致的"碰到就重弹"死循环。
+    # 换成自己画的面板之后，窗口是我们的、位置也是我们摆的（贴在灯的侧边，
+    # 不再压住灯、也不压住光标），整个 hack 连同它对 Qt 内部类名的依赖一起删掉。
 
     def _toggle_blink(self):
         self._blink_on = not self._blink_on
@@ -234,6 +389,30 @@ class TrafficLight(QWidget):
 
     # ------------------------------------------------------------ 鼠标
 
+    def enterEvent(self, event):
+        """鼠标进入点亮的灯珠区域——开始计时，不是立刻弹。
+
+        注意"进入"只发生在**画了东西**的像素上：窗口开了
+        WA_TranslucentBackground，而 Windows 上完全透明的像素是点击穿透的。
+        所以灯的透明角落不会有悬停提示——和"点击区只限灯珠"是同一套边界。
+        """
+        self._on_hover_enter()
+
+    def leaveEvent(self, event):
+        self._on_hover_leave()
+
+    # 面板上的进出走同一对处理函数：鼠标从灯挪到面板上时，灯会收到 Leave、
+    # 面板收到 Enter，一次事件循环里净效果是"仍然在悬停"，所以不会闪。
+    def _on_hover_enter(self):
+        self._hovering = True
+        self._hide_timer.stop()      # 还在宽限期内就又回来了：取消收起
+        self._show_timer.start(HOVER_SHOW_DELAY_MS)
+
+    def _on_hover_leave(self):
+        self._hovering = False
+        self._show_timer.stop()      # 延迟内就移开了：不弹
+        self._hide_timer.start(HOVER_HIDE_GRACE_MS)
+
     def mousePressEvent(self, event):
         core.debug(
             f"PRESS button={event.button()} buttons={event.buttons()} "
@@ -241,6 +420,11 @@ class TrafficLight(QWidget):
             f"global={event.globalPosition().toPoint()}"
         )
         if event.button() == Qt.LeftButton:
+            # 拖动期间不弹提示：按住左键时鼠标必然一直停在灯上，
+            # 不拦的话 400ms 后就会弹出来挡住你要拖去的位置。
+            self._show_timer.stop()
+            self._hide_timer.stop()
+            self._hide_tooltip()
             self._press_pos = event.position().toPoint()
             self._press_time = time.monotonic()
             self._drag_offset = (
@@ -275,6 +459,11 @@ class TrafficLight(QWidget):
             self._on_click(event.position())
         else:
             self._save_position()
+
+        # 按下的那一下把待弹的计时取消掉了，松开后光标多半还在灯上，
+        # 所以重新起一轮计时。不这么做就得先把鼠标移开再移回来。
+        if self._hovering and not self._panel.isVisible():
+            self._show_timer.start(HOVER_SHOW_DELAY_MS)
 
     def _active_lamp_rect(self):
         """当前点亮的那颗灯珠的圆，None 表示没有点亮的灯（暗态）。"""
@@ -382,6 +571,10 @@ class TrafficLight(QWidget):
     # ------------------------------------------------------------ Win32
 
     def _assert_topmost(self):
+        # 面板也是 topmost，正在显示时别去跟它抢层级——否则灯会把面板咬掉一块。
+        # 让过这一轮而已，2 秒后的下一轮自然会把灯补回最上层。
+        if self._panel.isVisible():
+            return
         if sys.platform != "win32":
             return
         try:
@@ -444,8 +637,8 @@ class Config:
 def run():
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
-    # 只含 QToolTip 一条规则，不会波及右键菜单和对话框
-    app.setStyleSheet(tooltip.TOOLTIP_QSS)
+    # 只含悬停面板一条规则，不会波及右键菜单和对话框
+    app.setStyleSheet(tooltip.PANEL_QSS)
 
     cfg = Config()
     light = TrafficLight(cfg)
